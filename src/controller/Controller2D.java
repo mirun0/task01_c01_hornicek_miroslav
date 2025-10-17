@@ -1,41 +1,42 @@
 package controller;
 
 import java.awt.Color;
-import java.awt.Font;
-import java.awt.Graphics;
-import java.awt.event.KeyAdapter;
-import java.awt.event.KeyEvent;
-import java.awt.event.MouseAdapter;
-import java.awt.event.MouseEvent;
-import java.awt.event.MouseMotionAdapter;
 import java.util.ArrayList;
 
 import model.Line;
 import model.Point;
 import model.Polygon;
-import rasterize.LineRasterizer;
+import rasterize.LineRasterizerGradient;
 import rasterize.LineRasterizerTrivial;
+import utils.MathUtils;
+import utils.RandomColor;
 import view.Panel;
 
 public class Controller2D {
-    private final Panel panel;
+    Panel panel;
 
-    private int w;
-    private int h;
+    int w;
+    int h;
 
-    private int color = 0xffffff;
-    private int gradientColor = 0xff0000;
+    int color = 0xffffff;
+    int gradientColor = 0xff0000;
 
-    private LineRasterizer lineRasterizer;
+    LineRasterizerTrivial lineRasterizerTrivial;
+    LineRasterizerGradient lineRasterizerGradient;
 
-    private boolean polygonCreation = false;
-    private boolean lineCreation = false;
-    private boolean gradientCreation = false;
+    boolean polygonCreation = false;
+    boolean lineCreation = false;
+    boolean gradientCreation = false;
+    boolean newPointCreation = false;
+    boolean pointDeletion = false;
+    boolean pointMoving = false;
+    
+    Polygon deletingPointFrom;
 
-    private boolean shiftPressed = false;
+    boolean shiftPressed = false;
 
-    private double snapTolerance = Math.toRadians(10);
-    private double[] snapAngles = {
+    double snapTolerance = Math.toRadians(15);
+    double[] snapAngles = {
         0,
         Math.PI / 4,
         Math.PI / 2,
@@ -46,17 +47,25 @@ public class Controller2D {
         - 3 * Math.PI / 4
     };
 
-    private int snappedX;
-    private int snappedY;
+    int snappedX;
+    int snappedY;
 
-    private ArrayList<Polygon> polygons = new ArrayList<Polygon>();
-    private ArrayList<Line> lines = new ArrayList<Line>();
+    ArrayList<Polygon> polygons;
+    ArrayList<Line> lines;
 
-    private Polygon activePolygon;
-    private Line activeLine;
+    Polygon activePolygon;
+    Line activeLine;
 
-    private Point movingPoint;
-    private Graphics g;
+    Point movingPoint;
+
+    float findPointPrecision = 10;
+    float createNewPointPrecision = 30;
+
+    MouseHandler mouseHandler;
+    KeyHandler keyHandler;
+    MouseMotionHandler mouseMotionHandler;
+
+    Renderer2D renderer2d;
 
     public Controller2D(Panel panel) {
         this.panel = panel;
@@ -64,308 +73,153 @@ public class Controller2D {
         this.w = panel.getRaster().getWidth();
         this.h = panel.getRaster().getHeight();
 
-        this.lineRasterizer = new LineRasterizerTrivial(panel.getRaster());
-        lineRasterizer.setColor(color);
+        this.polygons = new ArrayList<Polygon>();
+        this.lines = new ArrayList<Line>();
 
-        g = panel.getRaster().getGraphics();
+        this.lineRasterizerTrivial = new LineRasterizerTrivial(panel.getRaster());
+        this.lineRasterizerGradient = new LineRasterizerGradient(panel.getRaster());
+
+        this.renderer2d = new Renderer2D(this);
+        this.mouseHandler = new MouseHandler(this);
+        this.keyHandler = new KeyHandler(this);
+        this.mouseMotionHandler = new MouseMotionHandler(this);
 
         initListeners();
-        renderUI();
+        renderer2d.renderUI();
     }
 
-    private void initListeners() {
-        panel.addMouseListener(new MouseAdapter() {
-
-            @Override
-            public void mousePressed(MouseEvent e) {
-                super.mousePressed(e);
-
-                if(e.getButton() == MouseEvent.BUTTON1) {
-                    if(lineCreation) {
-                        if(activeLine == null) {
-                            activeLine = new Line(new Point(e.getX(), e.getY()), null, color);
-                            if(gradientCreation) {
-                                activeLine.setGradient(color, gradientColor);
-                            }
-                        } else {
-                            activeLine.setB(new Point(snappedX, snappedY));
-                            lines.add(activeLine);
-                            activeLine = null;
-                        }
-                    } else if(polygonCreation) {
-                        if(activePolygon == null) {
-                            ArrayList<Point> points = new ArrayList<>();
-                            points.add(new Point(e.getX(), e.getY()));
-                            activePolygon = new Polygon(points, color);
-
-                        } else {
-                            activePolygon.addPoint(new Point(snappedX, snappedY));
-                        }
-                    } else {
-                        Point find = findPoint(e.getX(), e.getY());
-                        if(find != null) {
-                            movingPoint = find;
-                        } else {
-                            movingPoint = null;
-                        }
-                    }
-                }
-
-                if(e.getButton() == MouseEvent.BUTTON3) {
-
-                    if(lineCreation) {
-                        activeLine = null;
-                    }
-
-                    if(polygonCreation) {
-                        if(activePolygon != null && activePolygon.getPoints().size() > 2)
-                            polygons.add(activePolygon);
-                        activePolygon = null;
-                    }
-                }
-
-                render();
-                panel.repaint();
-            }
-        });
-
-        panel.addKeyListener(new KeyAdapter() {
-
-            @Override
-            public void keyPressed(KeyEvent e) {
-                super.keyPressed(e);
-
-                if(e.getKeyCode() == KeyEvent.VK_SHIFT) {
-                    shiftPressed = true;
-                }
-
-                if(e.getKeyCode() == KeyEvent.VK_C) {
-                    clear();
-                    panel.repaint();
-                }
-
-                // mod Line
-                if(e.getKeyCode() == KeyEvent.VK_V) {
-                    polygonCreation = false;
-                    lineCreation = true;
-                    gradientCreation = false;
-                    activePolygon = null;
-
-                    render();
-                    panel.repaint();
-                }
-
-                // mod Polygon
-                if(e.getKeyCode() == KeyEvent.VK_B) {
-                    lineCreation = false;
-                    polygonCreation = true;
-                    gradientCreation = false;
-                    activeLine = null;
-
-                    render();
-                    panel.repaint();
-                }
-
-                if(e.getKeyCode() == KeyEvent.VK_ESCAPE) {
-                    gradientCreation = false;
-                    lineCreation = false;
-                    polygonCreation = false;
-                    activeLine = null;
-                    activePolygon = null;
-
-                    render();
-                    panel.repaint();
-                }
-
-                if(e.getKeyCode() == KeyEvent.VK_G) {
-                    gradientCreation = true;
-                    lineCreation = true;
-                    polygonCreation = false;
-                    activePolygon = null;
-
-                    render();
-                    panel.repaint();
-                }
-            }
-
-            @Override
-            public void keyReleased(KeyEvent e) {
-                super.keyReleased(e);
-                
-                if(e.getKeyCode() == KeyEvent.VK_SHIFT) {
-                    shiftPressed = false;
-                }
-
-            }
-        });
-
-        panel.addMouseMotionListener(new MouseMotionAdapter() {
-            
-            @Override
-            public void mouseMoved(MouseEvent e) {
-                super.mouseMoved(e);
-
-                snappedX = e.getX();
-                snappedY = e.getY();
-
-                render();
-            }
-
-            @Override
-            public void mouseDragged(MouseEvent e) {
-                super.mouseDragged(e);
-
-                if(movingPoint != null && !lineCreation && !polygonCreation) {
-                    movingPoint.setX(e.getX());
-                    movingPoint.setY(e.getY());
-                }
-
-                render();
-            }
-        });
+    void initListeners() {
+        panel.addMouseListener(mouseHandler);
+        panel.addKeyListener(keyHandler);
+        panel.addMouseMotionListener(mouseMotionHandler);
     }
 
-    private void render() {
-        panel.getRaster().clear(Color.BLACK);
+    void render() {
+        renderer2d.render();
+    }
 
-        // render active line
-        if(lineCreation) {
-            if(activeLine != null) {
-                if(shiftPressed) {
-                    Point snapPoint = snap(activeLine.getPointA().getX(), activeLine.getPointA().getY(), snappedX, snappedY);
-                    snappedX = snapPoint.getX();
-                    snappedY = snapPoint.getY();
-                }
-                lineRasterizer.setColor(activeLine.getColor());
-                lineRasterizer.setGradient(activeLine.getColor(), activeLine.getGradient());
-                lineRasterizer.rasterize(activeLine.getPointA().getX(), activeLine.getPointA().getY(), snappedX, snappedY);
-            }
-        }
 
-        // render all other lines
+    Point findPoint(int x, int y) {
+        Point closest = null;
+        float closestLength = findPointPrecision;
+        float l;
+
         for (Line line : lines) {
-            lineRasterizer.setColor(line.getColor());
-            lineRasterizer.setGradient(line.getColor(), line.getGradient());
-            lineRasterizer.rasterize(line.getPointA().getX(), line.getPointA().getY(), line.getPointB().getX(), line.getPointB().getY());
-        }
+            l = MathUtils.length(x, y, line.getPointA().getX(), line.getPointA().getY());
+            if (l <= findPointPrecision) {
+                if(closestLength > l) {
+                    closestLength = l;
+                    closest = line.getPointA();
+                }
+            }
 
-        // render active polygon
-        if(polygonCreation) {
-            if(activePolygon != null) {
-
-                lineRasterizer.setColor(activePolygon.getColor());
-                // renderActivePolygon()
-                renderPolygon(activePolygon);
-
-                // interactive lines
-                lineRasterizer.rasterize(activePolygon.getPoints().get(0).getX() , activePolygon.getPoints().get(0).getY(), 
-                snappedX, snappedY);
-
-                lineRasterizer.rasterize(activePolygon.getPoints().get(activePolygon.size() - 1).getX(), 
-                activePolygon.getPoints().get(activePolygon.size() - 1).getY(), snappedX, snappedY);
-
+            l = MathUtils.length(x, y, line.getPointB().getX(), line.getPointB().getY());
+            if (l <= findPointPrecision) {
+                if(closestLength > l) {
+                    closestLength = l;
+                    closest = line.getPointB();
+                }
             }
         }
 
-        // render all other polygons
         for (Polygon polygon : polygons) {
-            lineRasterizer.setColor(polygon.getColor());
-            renderPolygon(polygon);
-            lineRasterizer.rasterize(polygon.getPoints().get(0).getX(), polygon.getPoints().get(0).getY(), 
-            polygon.getPoints().get(polygon.size() - 1).getX(), polygon.getPoints().get(polygon.size() - 1).getY());
+            for (Point point : polygon.getPoints()) {
+                l = MathUtils.length(x, y, point.getX(), point.getY());
+                if (l <= findPointPrecision) {
+                    if(closestLength > l) {
+                        closestLength = l;
+                        closest = point;
+                        deletingPointFrom = polygon;
+                    }
+                }
+            }
         }
 
-        // render all points
-        renderPoints();
-
-        renderUI();
-
-        panel.repaint();
+        return closest;
     }
 
-    private void renderUI() {
-        g.setColor(Color.DARK_GRAY);
-        g.fillRect(0, h - 20, w, 20);
-
-        g.setColor(Color.WHITE);
-        g.setFont(new Font("Monospaced", Font.PLAIN, 13));
-        g.drawString("Point Select - Esc", 5, h - 5);
-        g.drawString("Line - V", 170, h - 5);
-        g.drawString("Polygon - B", 257, h - 5);
-        g.drawString("Gradient - G", 370, h - 5);
-        g.drawString("Clear - C", 490, h - 5);
-        g.drawString("Snap - Hold Shift", 590, h - 5);
-
-        g.setFont(new Font("Monospaced", Font.BOLD, 13));
-        g.setColor(Color.GREEN);
-        if(lineCreation & !gradientCreation) {
-            g.drawString("Line - V", 170, h - 5);
-        } else if(polygonCreation) {
-            g.drawString("Polygon - B", 257, h - 5);
-        } else if(gradientCreation) {
-            g.drawString("Gradient - G", 370, h - 5);
+    void deletePoint() {
+        Point p = findPoint(snappedX, snappedY);
+        if(deletingPointFrom == null) return;
+        if(deletingPointFrom.size() < 4) {
+            polygons.remove(deletingPointFrom);
+            deletingPointFrom = null;
         } else {
-            g.drawString("Point Select - Esc", 5, h - 5);
-        }
-
-    }
-
-    private void renderPolygon(Polygon polygon) {
-        for (int i = 0; i < polygon.size() - 1; i++) {
-            lineRasterizer.rasterize(polygon.getPoints().get(i).getX() , polygon.getPoints().get(i).getY(), 
-            polygon.getPoints().get(i + 1).getX(), polygon.getPoints().get(i + 1).getY());
+            deletingPointFrom.getPoints().remove(p);
         }
     }
 
-    private void renderPoints() {
-        for (Line line : lines) {
-            for(int j = -2; j <= 2; j++) {
-                for(int k = -2; k <= 2; k++) {
-                    panel.getRaster().setPixel(line.getPointA().getX() + j, line.getPointA().getY() + k, color);
-                    panel.getRaster().setPixel(line.getPointB().getX() + j, line.getPointB().getY() + k, color);
-                }
-            }
-        }
-        for (Polygon polygon : polygons) {
-            for (Point point : polygon.getPoints()) {
-                for(int j = -2; j <= 2; j++) {
-                    for(int k = -2; k <= 2; k++) {
-                        panel.getRaster().setPixel(point.getX() + j, point.getY() + k, color);
+    void createNewPoint() {
+        float closestLength = createNewPointPrecision;
+        int closestPointIndex = -1;
+        int closestPolygonIndex = -1;
+
+        int x = 0;
+        int y = 0;
+
+        for (int i = 0; i < polygons.size(); i++) {
+
+            Polygon polygon = polygons.get(i);
+            polygon.addPoint(polygon.getPoints().get(0));
+            for (int j = 0; j < polygon.getPoints().size() - 1; j++) {
+                Point pa = polygon.getPoints().get(j);
+                Point pb = polygon.getPoints().get(j + 1);
+
+                // obecny tvar primky (ax + by + c = 0) (kde zde x a y jsou souradnice noveho bodu)
+                // a = y2 - y1
+                // b = -(x2 - x1)
+                // c = (x2 - x1)*y1 - (y2 - y1)*x1
+                float a = pb.getY() - pa.getY();
+                float b = -(pb.getX() - pa.getX());
+                float c = -b * pa.getY() - (float)a * pa.getX();
+                // kolmy posun rika jak daleko je bod od primky ve smeru normaly k usecce (potreba normalizovat delkou vydelenim)
+                float l = Math.abs(a * snappedX + b * snappedY + c) / (float)Math.sqrt(a*a + b*b); // kolmy posun / delka
+
+                // pomoci skalaru (dot product) vypocitame uhel mezi bodem mysi (P) a pointem A a useckou A B, tento uhel rika jak moc je
+                // usecka AP rovnobezna s AB. t je pomer mezi skalarnim soucinem vektoru AP a AB a celkovou delkou usecky (cimz rekne zda 
+                // lezi projekce na usecce)
+                // pokud na usecku ani bod P "nedopadne", tak t < 0 a pokud ji "prepadne" tak t > 1
+
+                //     P
+                //    /|
+                //   / |
+                //  /  |
+                // A---|------- B     (AP' je projekce vektoru AP na usecce AB, zde je t cca 0.4, takze lezi uvnitr usecky a muzem s nim dal pocitat)
+                //     P'
+
+                float dx = pb.getX() - pa.getX();
+                float dy = pb.getY() - pa.getY();
+                float len = dx*dx + dy*dy;
+                float t = ((snappedX - pa.getX()) * dx + (snappedY - pa.getY()) * dy) / len;   // skalarni soucin AP * AB / delka na 2
+
+                if(t >= 0 && t <= 1) {
+                    if(l <= createNewPointPrecision) {
+                        if(closestLength > l) {
+                            closestLength = l;
+                            closestPolygonIndex = i;
+                            closestPointIndex = j + 1; // chceme na B
+
+                            // projected souradnice primo na te usecce (aby bod byl na usecce, ne na pozici mysi)
+                            // A ----- P (t) -------B
+                            x = (int)(pa.getX() + t * (pb.getX() - pa.getX()));
+                            y = (int)(pa.getY() + t * (pb.getY() - pa.getY()));
+                        }
                     }
-                }   
-            }
-        }
-    }
-
-    private Point findPoint(int x, int y) {
-        for (Line line : lines) {
-            int pxa = line.getPointA().getX();
-            int pya = line.getPointA().getY();
-            double da = Math.hypot(x - pxa, y - pya);
-            if (da <= 10) {
-                return line.getPointA();
-            }
-
-            int pxb = line.getPointB().getX();
-            int pyb = line.getPointB().getY();
-            double db = Math.hypot(x - pxb, y - pyb);
-            if (db <= 10) {
-                return line.getPointB();
-            }
-        }
-
-        for (Polygon polygon : polygons) {
-            for (Point point : polygon.getPoints()) {
-                double db = Math.hypot(x - point.getX(), y - point.getY());
-                if (db <= 10) {
-                    return point;
                 }
             }
+            polygon.getPoints().remove(polygon.size() - 1);
         }
-        return null;
+
+        if(closestPolygonIndex != -1) {
+            int c = color;
+            if(gradientCreation) {
+                c = RandomColor.create();
+            }
+            polygons.get(closestPolygonIndex).getPoints().add(closestPointIndex, new Point(x, y, c));
+        }
     }
 
-    private Point snap(int startX, int startY, int nowX, int nowY) {
+    Point snap(int startX, int startY, int nowX, int nowY) {
         double dx = nowX - startX;
         double dy = nowY - startY;
         double angle = Math.atan2(dy, dx);
@@ -381,7 +235,7 @@ public class Controller2D {
         int snappedX = (int) Math.round(startX + length * Math.cos(angle));
         int snappedY = (int) Math.round(startY + length * Math.sin(angle));
 
-        return new Point(snappedX, snappedY);
+        return new Point(snappedX, snappedY, 1);
     }
 
     public void clear() {

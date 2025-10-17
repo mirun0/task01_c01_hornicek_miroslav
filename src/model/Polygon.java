@@ -5,19 +5,13 @@ import java.util.ArrayList;
 public class Polygon {
     
     private ArrayList<Point> points;
-    private int color;
 
-    public Polygon(ArrayList<Point> points, int color) {
+    public Polygon(ArrayList<Point> points) {
         this.points = points;
-        this.color = color;
     }
 
     public ArrayList<Point> getPoints() {
         return points;
-    }
-
-    public int getColor() {
-        return color;
     }
 
     public int size() {
